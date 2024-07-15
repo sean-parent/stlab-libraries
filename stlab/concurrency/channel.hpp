@@ -9,11 +9,14 @@
 #ifndef STLAB_CONCURRENCY_CHANNEL_HPP
 #define STLAB_CONCURRENCY_CHANNEL_HPP
 
+#include <stlab/config.hpp>
+
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <cassert>
 #include <chrono>
+#include <cstdint>
 #include <deque>
 #include <exception>
 #include <memory>
@@ -33,10 +36,7 @@
 /**************************************************************************************************/
 
 namespace stlab {
-
-/**************************************************************************************************/
-
-inline namespace v1 {
+inline namespace STLAB_VERSION_NAMESPACE() {
 
 /**************************************************************************************************/
 
@@ -52,9 +52,9 @@ class receiver;
  * it is destructed. await_try is await if a value is available, otherwise yield (allowing for an
  * interruptible task).
  */
-enum class process_state { await, yield };
+enum class process_state : std::uint8_t { await, yield };
 
-enum class message_t { argument, error };
+enum class message_t : std::uint8_t { argument, error };
 
 /**************************************************************************************************/
 
@@ -68,7 +68,7 @@ constexpr process_state_scheduled yield_immediate{process_state::yield,
 
 /**************************************************************************************************/
 
-enum class channel_error_codes { // names for channel errors
+enum class channel_error_codes : std::uint8_t { // names for channel errors
     broken_channel = 1,
     process_already_running = 2,
     no_state
@@ -78,9 +78,9 @@ enum class channel_error_codes { // names for channel errors
 
 namespace detail {
 
-inline char const* channel_error_map(
-    channel_error_codes code) noexcept { // convert to name of channel error
-    switch (code) {                      // switch on error code value
+inline auto channel_error_map(channel_error_codes code) noexcept
+    -> char const* { // convert to name of channel error
+    switch (code) {  // switch on error code value
         case channel_error_codes::broken_channel:
             return "broken channel";
 
@@ -107,9 +107,11 @@ class channel_error : public std::logic_error {
 public:
     explicit channel_error(channel_error_codes code) : logic_error(""), _code(code) {}
 
-    const channel_error_codes& code() const noexcept { return _code; }
+    [[nodiscard]] auto code() const noexcept -> const channel_error_codes& { return _code; }
 
-    const char* what() const noexcept override { return detail::channel_error_map(_code); }
+    [[nodiscard]] auto what() const noexcept -> const char* override {
+        return detail::channel_error_map(_code);
+    }
 
 private:
     const channel_error_codes _code;
@@ -120,7 +122,7 @@ private:
 template <typename I, // I models ForwardIterator
           typename N, // N models PositiveInteger
           typename F> // F models UnaryFunction
-I for_each_n(I p, N n, F f) {
+auto for_each_n(I p, N n, F f) -> I {
     for (N i = 0; i != n; ++i, ++p) {
         f(*p);
     }
@@ -129,7 +131,7 @@ I for_each_n(I p, N n, F f) {
 
 struct identity {
     template <typename T>
-    T operator()(T&& x) const {
+    auto operator()(T&& x) const -> T {
         return std::forward<T>(x);
     }
 };
@@ -187,26 +189,27 @@ using yield_type = decltype(yield_type_<T, Arg...>(0));
 class avoid_ {};
 
 template <typename T>
-using avoid = std::conditional_t<std::is_same<void, T>::value, avoid_, T>;
+using avoid = std::conditional_t<std::is_same_v<void, T>, avoid_, T>;
 
 /**************************************************************************************************/
 
 template <typename F, std::size_t... I, typename... T>
-auto invoke_(F&& f, std::tuple<std::variant<T, std::exception_ptr>...>& t, std::index_sequence<I...>) {
+auto invoke_(F&& f,
+             std::tuple<std::variant<T, std::exception_ptr>...>& t,
+             std::index_sequence<I...>) {
     return std::forward<F>(f)(std::move(std::get<I>(t))...);
 }
 
 template <typename F, typename... Args>
 auto avoid_invoke(F&& f, std::tuple<std::variant<Args, std::exception_ptr>...>& t)
-    -> std::enable_if_t<!std::is_same<void, yield_type<unwrap_reference_t<F>, Args...>>::value,
+    -> std::enable_if_t<!std::is_same_v<void, yield_type<unwrap_reference_t<F>, Args...>>,
                         yield_type<unwrap_reference_t<F>, Args...>> {
     return invoke_(std::forward<F>(f), t, std::make_index_sequence<sizeof...(Args)>());
 }
 
 template <typename F, typename... Args>
 auto avoid_invoke(F&& f, std::tuple<std::variant<Args, std::exception_ptr>...>& t)
-    -> std::enable_if_t<std::is_same<void, yield_type<unwrap_reference_t<F>, Args...>>::value,
-                        avoid_> {
+    -> std::enable_if_t<std::is_same_v<void, yield_type<unwrap_reference_t<F>, Args...>>, avoid_> {
     invoke_(std::forward<F>(f), t, std::make_index_sequence<sizeof...(Args)>());
     return avoid_();
 }
@@ -243,12 +246,12 @@ struct invoke_variant_dispatcher<1> {
 };
 
 template <typename F, typename T, typename R, std::size_t S, typename... Args>
-auto avoid_invoke_variant(F&& f, T& t) -> std::enable_if_t<!std::is_same<void, R>::value, R> {
+auto avoid_invoke_variant(F&& f, T& t) -> std::enable_if_t<!std::is_same_v<void, R>, R> {
     return invoke_variant_dispatcher<S>::template invoke<F, T, Args...>(std::forward<F>(f), t);
 }
 
 template <typename F, typename T, typename R, std::size_t S, typename... Args>
-auto avoid_invoke_variant(F&& f, T& t) -> std::enable_if_t<std::is_same<void, R>::value, avoid_> {
+auto avoid_invoke_variant(F&& f, T& t) -> std::enable_if_t<std::is_same_v<void, R>, avoid_> {
     invoke_variant_dispatcher<S>::template invoke<F, T, Args...>(std::forward<F>(f), t);
     return avoid_();
 }
@@ -268,9 +271,9 @@ struct shared_process_receiver {
     virtual void clear_to_send() = 0;
     virtual void add_receiver() = 0;
     virtual void remove_receiver() = 0;
-    virtual executor_t executor() const = 0;
+    [[nodiscard]] virtual auto executor() const -> executor_t = 0;
     virtual void set_buffer_size(size_t) = 0;
-    virtual size_t buffer_size() const = 0;
+    [[nodiscard]] virtual auto buffer_size() const -> size_t = 0;
 };
 
 /**************************************************************************************************/
@@ -283,7 +286,7 @@ struct shared_process_sender {
     virtual void send(std::exception_ptr) = 0;
     virtual void add_sender() = 0;
     virtual void remove_sender() = 0;
-    virtual std::size_t free_buffer() const = 0;
+    [[nodiscard]] virtual auto free_buffer() const -> std::size_t = 0;
 };
 
 /**************************************************************************************************/
@@ -377,7 +380,7 @@ void await_variant_args(P& process,
 /**************************************************************************************************/
 
 template <typename T>
-std::optional<std::exception_ptr> find_argument_error(T& argument) {
+auto find_argument_error(T& argument) -> std::optional<std::exception_ptr> {
     std::optional<std::exception_ptr> result;
 
     auto error_index = tuple_find(argument, [](const auto& c) {
@@ -402,16 +405,16 @@ struct default_queue_strategy {
 
     std::deque<std::variant<avoid<T>, std::exception_ptr>> _queue;
 
-    bool empty() const { return _queue.empty(); }
+    [[nodiscard]] auto empty() const -> bool { return _queue.empty(); }
 
     auto front() { return std::make_tuple(std::move(_queue.front())); }
 
     void pop_front() { _queue.pop_front(); }
 
-    auto size() const { return std::array<std::size_t, 1>{{_queue.size()}}; }
+    [[nodiscard]] auto size() const { return std::array<std::size_t, 1>{{_queue.size()}}; }
 
     template <std::size_t>
-    auto queue_size() const {
+    [[nodiscard]] auto queue_size() const {
         return _queue.size();
     }
 
@@ -433,7 +436,7 @@ struct zip_with_queue_strategy {
 
     queue_t _queue;
 
-    bool empty() const {
+    [[nodiscard]] auto empty() const -> bool {
         return tuple_find(_queue, [](const auto& c) { return c.empty(); }) != Size;
     }
 
@@ -451,7 +454,7 @@ struct zip_with_queue_strategy {
         tuple_for_each(_queue, [](auto& c) { c.pop_front(); });
     }
 
-    auto size() const {
+    [[nodiscard]] auto size() const {
         queue_size_t result;
         std::size_t i = 0;
         tuple_for_each(_queue, [&i, &result](const auto& c) { result[i++] = c.size(); });
@@ -459,7 +462,7 @@ struct zip_with_queue_strategy {
     }
 
     template <std::size_t I>
-    auto queue_size() const {
+    [[nodiscard]] auto queue_size() const {
         return std::get<I>(_queue).size();
     }
 
@@ -483,15 +486,13 @@ struct round_robin_queue_strategy {
     std::size_t _popped_index{0};
     queue_t _queue;
 
-    bool empty() const {
-        return get_i(
-            _queue, _index, [](const auto& c) { return c.empty(); }, true);
+    [[nodiscard]] auto empty() const -> bool {
+        return get_i(_queue, _index, [](const auto& c) { return c.empty(); }, true);
     }
 
     auto front() {
         assert(!empty() && "front on an empty container is a very bad idea!");
-        return std::make_tuple(get_i(
-            _queue, _index, [](auto& c) { return c.front(); }, item_t{}));
+        return std::make_tuple(get_i(_queue, _index, [](auto& c) { return c.front(); }, item_t{}));
     }
 
     void pop_front() {
@@ -501,7 +502,7 @@ struct round_robin_queue_strategy {
         if (_index == Size) _index = 0; // restart from the first sender
     }
 
-    auto size() const {
+    [[nodiscard]] auto size() const {
         queue_size_t result;
         std::size_t i = 0;
         tuple_for_each(_queue, [&i, &result, this](const auto& c) {
@@ -515,7 +516,7 @@ struct round_robin_queue_strategy {
     }
 
     template <std::size_t I>
-    auto queue_size() const {
+    [[nodiscard]] auto queue_size() const {
         return std::get<I>(_queue).size();
     }
 
@@ -539,15 +540,15 @@ struct unordered_queue_strategy {
     std::size_t _popped_index{0};
     queue_t _queue;
 
-    bool empty() const {
+    [[nodiscard]] auto empty() const -> bool {
         return tuple_find(_queue, [](const auto& c) { return !c.empty(); }) == Size;
     }
 
     auto front() {
         assert(!empty() && "front on an empty container is a very bad idea!");
         _index = tuple_find(_queue, [](const auto& c) { return !c.empty(); });
-        return std::make_tuple(get_i(
-            _queue, _index, [](auto& c) { return std::move(c.front()); }, item_t{}));
+        return std::make_tuple(
+            get_i(_queue, _index, [](auto& c) { return std::move(c.front()); }, item_t{}));
     }
 
     void pop_front() {
@@ -555,7 +556,7 @@ struct unordered_queue_strategy {
         _popped_index = _index;
     }
 
-    auto size() const {
+    [[nodiscard]] auto size() const {
         queue_size_t result;
         std::size_t i = 0;
         tuple_for_each(_queue, [&i, &result, this](const auto& c) {
@@ -570,7 +571,7 @@ struct unordered_queue_strategy {
     }
 
     template <std::size_t I>
-    auto queue_size() const {
+    [[nodiscard]] auto queue_size() const {
         return std::get<I>(_queue).size();
     }
 
@@ -627,7 +628,7 @@ struct shared_process_sender_indexed : public shared_process_sender<Arg> {
 
     void send(avoid<Arg> arg) override { enqueue(std::move(arg)); }
 
-    std::size_t free_buffer() const override {
+    [[nodiscard]] auto free_buffer() const -> std::size_t override {
         std::unique_lock<std::mutex> lock(_shared_process._process_mutex);
         return _shared_process._process_buffer_size == 0 ?
                    std::numeric_limits<std::size_t>::max() :
@@ -654,9 +655,7 @@ template <typename R, typename Enabled = void>
 struct downstream;
 
 template <typename R>
-struct downstream<
-    R,
-    std::enable_if_t<std::is_copy_constructible<R>::value || std::is_same<R, void>::value>> {
+struct downstream<R, std::enable_if_t<std::is_copy_constructible_v<R> || std::is_same_v<R, void>>> {
     std::deque<sender<R>> _data;
 
     template <typename F>
@@ -666,14 +665,14 @@ struct downstream<
 
     void clear() { _data.clear(); }
 
-    std::size_t size() const { return _data.size(); }
+    [[nodiscard]] auto size() const -> std::size_t { return _data.size(); }
 
     template <typename... Args>
     void send(std::size_t n, Args... args) {
         stlab::for_each_n(begin(_data), n, [&](const auto& e) { e(args...); });
     }
 
-    std::size_t minimum_free_buffer() const {
+    [[nodiscard]] auto minimum_free_buffer() const -> std::size_t {
         if (size() == 0) return 0;
         // std::reduce with C++17
         return std::accumulate(_data.cbegin(), _data.cend(),
@@ -685,9 +684,8 @@ struct downstream<
 };
 
 template <typename R>
-struct downstream<
-    R,
-    std::enable_if_t<!std::is_copy_constructible<R>::value && !std::is_same<R, void>::value>> {
+struct downstream<R,
+                  std::enable_if_t<!std::is_copy_constructible_v<R> && !std::is_same_v<R, void>>> {
     std::optional<sender<R>> _data;
 
     template <typename F>
@@ -697,14 +695,14 @@ struct downstream<
 
     void clear() { _data = std::nullopt; }
 
-    std::size_t size() const { return 1; }
+    [[nodiscard]] auto size() const -> std::size_t { return 1; }
 
     template <typename... Args>
     void send(std::size_t, Args&&... args) {
         if (_data) (*_data)(std::forward<Args>(args)...);
     }
 
-    std::size_t minimum_free_buffer() const {
+    [[nodiscard]] auto minimum_free_buffer() const -> std::size_t {
         if (_data && (*_data).free_buffer()) return *(*_data).free_buffer();
         return 0;
     }
@@ -803,7 +801,7 @@ struct shared_process
         }
     }
 
-    executor_t executor() const override { return _executor; }
+    auto executor() const -> executor_t override { return _executor; }
 
     void task_done() {
         bool do_run;
@@ -872,7 +870,7 @@ struct shared_process
         return std::make_tuple(std::move(message), do_cts, do_close);
     }
 
-    bool dequeue() {
+    auto dequeue() -> bool {
         using queue_t = typename Q::value_type;
         std::optional<queue_t> message;
         std::array<bool, sizeof...(Args)> do_cts;
@@ -1178,7 +1176,7 @@ struct shared_process
 
     void set_buffer_size(size_t buffer_size) override { _process_buffer_size = buffer_size; }
 
-    size_t buffer_size() const override { return _process_buffer_size; }
+    auto buffer_size() const -> size_t override { return _process_buffer_size; }
 };
 
 /**************************************************************************************************/
@@ -1378,7 +1376,7 @@ struct annotated_process {
 };
 
 template <typename B, typename E>
-detail::annotations combine_bs_executor(B&& b, E&& e) {
+auto combine_bs_executor(B&& b, E&& e) -> detail::annotations {
     detail::annotations result{b._value};
     result._executor = std::forward<E>(e)._executor;
     return result;
@@ -1386,61 +1384,61 @@ detail::annotations combine_bs_executor(B&& b, E&& e) {
 
 } // namespace detail
 
-inline detail::annotations operator&(buffer_size bs, const executor& e) {
+inline auto operator&(buffer_size bs, const executor& e) -> detail::annotations {
     return detail::combine_bs_executor(bs, e);
 }
 
-inline detail::annotations operator&(buffer_size bs, executor&& e) {
+inline auto operator&(buffer_size bs, executor&& e) -> detail::annotations {
     return detail::combine_bs_executor(bs, std::move(e));
 }
 
-inline detail::annotations operator&(const executor& e, buffer_size bs) {
+inline auto operator&(const executor& e, buffer_size bs) -> detail::annotations {
     return detail::combine_bs_executor(bs, e);
 }
 
-inline detail::annotations operator&(executor&& e, buffer_size bs) {
+inline auto operator&(executor&& e, buffer_size bs) -> detail::annotations {
     return detail::combine_bs_executor(bs, std::move(e));
 }
 
 template <typename F>
-detail::annotated_process<F> operator&(buffer_size bs, F&& f) {
+auto operator&(buffer_size bs, F&& f) -> detail::annotated_process<F> {
     return detail::annotated_process<F>(std::forward<F>(f), bs);
 }
 
 template <typename F>
-detail::annotated_process<F> operator&(F&& f, buffer_size bs) {
+auto operator&(F&& f, buffer_size bs) -> detail::annotated_process<F> {
     return detail::annotated_process<F>(std::forward<F>(f), bs);
 }
 
 template <typename F>
-detail::annotated_process<F> operator&(executor_task_pair<F>&& etp, buffer_size bs) {
+auto operator&(executor_task_pair<F>&& etp, buffer_size bs) -> detail::annotated_process<F> {
     return detail::annotated_process<F>{std::move(etp), bs};
 }
 
 template <typename F>
-detail::annotated_process<F> operator&(buffer_size bs, executor_task_pair<F>&& etp) {
+auto operator&(buffer_size bs, executor_task_pair<F>&& etp) -> detail::annotated_process<F> {
     return detail::annotated_process<F>{std::move(etp), bs};
 }
 
 template <typename F>
-detail::annotated_process<F> operator&(detail::annotations&& a, F&& f) {
+auto operator&(detail::annotations&& a, F&& f) -> detail::annotated_process<F> {
     return detail::annotated_process<F>{std::forward<F>(f), std::move(a)};
 }
 
 template <typename F>
-detail::annotated_process<F> operator&(F&& f, detail::annotations&& a) {
+auto operator&(F&& f, detail::annotations&& a) -> detail::annotated_process<F> {
     return detail::annotated_process<F>{std::forward<F>(f), std::move(a)};
 }
 
 template <typename F>
-detail::annotated_process<F> operator&(detail::annotated_process<F>&& a, executor&& e) {
+auto operator&(detail::annotated_process<F>&& a, executor&& e) -> detail::annotated_process<F> {
     auto result{std::move(a)};
     a._annotations._executor = std::move(e._executor);
     return result;
 }
 
 template <typename F>
-detail::annotated_process<F> operator&(detail::annotated_process<F>&& a, buffer_size bs) {
+auto operator&(detail::annotated_process<F>&& a, buffer_size bs) -> detail::annotated_process<F> {
     auto result{std::move(a)};
     a._annotations._buffer_size = bs._value;
     return result;
@@ -1483,13 +1481,13 @@ public:
 
     receiver(receiver&&) noexcept = default;
 
-    receiver& operator=(const receiver& x) {
-        auto tmp = x;
-        *this = std::move(tmp);
-        return *this;
+    auto operator=(const receiver& x) -> receiver& {
+        // self-assignment is not allowed to disable cert-oop54-cpp warning (and is likely a bug)
+        assert(this != &x && "self-assignment is not allowed");
+        return *this = receiver(x);
     }
 
-    receiver& operator=(receiver&& x) noexcept = default;
+    auto operator=(receiver&& x) noexcept -> receiver& = default;
 
     void set_ready() {
         if (!_ready && _p) _p->remove_receiver();
@@ -1499,10 +1497,14 @@ public:
     void swap(receiver& x) noexcept { std::swap(*this, x); }
 
     inline friend void swap(receiver& x, receiver& y) noexcept { x.swap(y); }
-    inline friend bool operator==(const receiver& x, const receiver& y) { return x._p == y._p; };
-    inline friend bool operator!=(const receiver& x, const receiver& y) { return !(x == y); };
+    inline friend auto operator==(const receiver& x, const receiver& y) -> bool {
+        return x._p == y._p;
+    };
+    inline friend auto operator!=(const receiver& x, const receiver& y) -> bool {
+        return !(x == y);
+    };
 
-    bool ready() const { return _ready; }
+    [[nodiscard]] auto ready() const -> bool { return _ready; }
 
     template <typename F>
     auto operator|(F&& f) const {
@@ -1567,34 +1569,33 @@ public:
     sender() = default;
 
     ~sender() {
-        auto p = _p.lock();
-        if (p) p->remove_sender();
+        if (auto p = _p.lock()) p->remove_sender();
     }
 
     sender(const sender& x) : _p(x._p) {
-        auto p = _p.lock();
-        if (p) p->add_sender();
+        if (auto p = _p.lock()) p->add_sender();
     }
 
     sender(sender&&) noexcept = default;
 
-    sender& operator=(const sender& x) {
-        auto tmp = x;
-        *this = std::move(tmp);
-        return *this;
+    // copy-assign uses copy-ctor to keep sender count correct.
+    auto operator=(const sender& x) -> sender& {
+        // self-assignment is not allowed to disable cert-oop54-cpp warning (and is likely a bug)
+        assert(this != &x && "self-assignment is not allowed");
+        return *this = sender(x);
     }
 
-    sender& operator=(sender&&) noexcept = default;
+    auto operator=(sender&&) noexcept -> sender& = default;
 
     void swap(sender& x) noexcept { std::swap(*this, x); }
 
     inline friend void swap(sender& x, sender& y) noexcept { x.swap(y); }
 
-    inline friend bool operator==(const sender& x, const sender& y) {
+    inline friend auto operator==(const sender& x, const sender& y) -> bool {
         return x._p.lock() == y._p.lock();
     };
 
-    inline friend bool operator!=(const sender& x, const sender& y) { return !(x == y); };
+    inline friend auto operator!=(const sender& x, const sender& y) -> bool { return !(x == y); };
 
     void close() {
         auto p = _p.lock();
@@ -1608,7 +1609,7 @@ public:
         if (p) p->send(std::forward<A>(args)...);
     }
 
-    std::optional<std::size_t> free_buffer() const {
+    [[nodiscard]] auto free_buffer() const -> std::optional<std::size_t> {
         std::optional<std::size_t> result;
         auto p = _p.lock();
         if (p) result = p->free_buffer();
@@ -1641,18 +1642,18 @@ public:
 
     sender(const sender& x) = delete;
     sender(sender&&) noexcept = default;
-    sender& operator=(const sender& x) = delete;
-    sender& operator=(sender&&) noexcept = default;
+    auto operator=(const sender& x) -> sender& = delete;
+    auto operator=(sender&&) noexcept -> sender& = default;
 
     void swap(sender& x) noexcept { std::swap(*this, x); }
 
     inline friend void swap(sender& x, sender& y) noexcept { x.swap(y); }
 
-    inline friend bool operator==(const sender& x, const sender& y) {
+    inline friend auto operator==(const sender& x, const sender& y) -> bool {
         return x._p.lock() == y._p.lock();
     };
 
-    inline friend bool operator!=(const sender& x, const sender& y) { return !(x == y); };
+    inline friend auto operator!=(const sender& x, const sender& y) -> bool { return !(x == y); };
 
     void close() {
         auto p = _p.lock();
@@ -1666,7 +1667,7 @@ public:
         if (p) p->send(std::forward<A>(args)...);
     }
 
-    std::optional<std::size_t> free_buffer() const {
+    [[nodiscard]] auto free_buffer() const -> std::optional<std::size_t> {
         std::optional<std::size_t> result;
         auto p = _p.lock();
         if (p) result = p->free_buffer();
@@ -1696,19 +1697,18 @@ struct function_process<R(Args...)> {
         _done = false;
     }
 
-    R yield() {
+    auto yield() -> R {
         _done = true;
         return _bound();
     }
-    process_state_scheduled state() const { return _done ? await_forever : yield_immediate; }
+    [[nodiscard]] auto state() const -> process_state_scheduled {
+        return _done ? await_forever : yield_immediate;
+    }
 };
 
 /**************************************************************************************************/
 
-} // namespace v1
-
-/**************************************************************************************************/
-
+} // namespace STLAB_VERSION_NAMESPACE()
 } // namespace stlab
 
 /**************************************************************************************************/

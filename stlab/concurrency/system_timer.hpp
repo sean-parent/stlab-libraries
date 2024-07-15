@@ -19,6 +19,7 @@
 
 #if STLAB_TASK_SYSTEM(LIBDISPATCH)
 #include <dispatch/dispatch.h>
+#include <stlab/concurrency/default_executor.hpp>
 #elif STLAB_TASK_SYSTEM(WINDOWS)
 #include <Windows.h>
 #include <memory>
@@ -34,10 +35,7 @@
 /**************************************************************************************************/
 
 namespace stlab {
-
-/**************************************************************************************************/
-
-inline namespace v1 {
+inline namespace STLAB_VERSION_NAMESPACE() {
 
 /**************************************************************************************************/
 
@@ -58,15 +56,22 @@ struct system_timer_type {
     }
 
     template <typename F, typename Rep, typename Per = std::ratio<1>>
-    auto operator()(std::chrono::duration<Rep, Per> duration, F f) const
-        -> std::enable_if_t<std::is_nothrow_invocable_v<F>> {
+    auto operator()(std::chrono::duration<Rep, Per> duration,
+                    F f) const -> std::enable_if_t<std::is_nothrow_invocable_v<F>> {
         using namespace std::chrono;
 
-        using f_t = decltype(f);
+        dispatch_group_enter(detail::group()._group);
+
+        auto grouped = [_group = detail::group()._group, f = std::move(f)]() mutable {
+            f();
+            dispatch_group_leave(_group);
+        };
+
+        using f_t = decltype(grouped);
 
         dispatch_after_f(dispatch_time(0, duration_cast<nanoseconds>(duration).count()),
                          dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0),
-                         new f_t(std::move(f)), [](void* f_) {
+                         new f_t(std::move(grouped)), [](void* f_) {
                              auto f = static_cast<f_t*>(f_);
                              (*f)();
                              delete f;
@@ -110,8 +115,8 @@ public:
     }
 
     template <typename F, typename Rep, typename Per = std::ratio<1>>
-    auto operator()(std::chrono::duration<Rep, Per> duration, F&& f)
-        -> std::enable_if_t<std::is_nothrow_invocable_v<F>> {
+    auto operator()(std::chrono::duration<Rep, Per> duration,
+                    F&& f) -> std::enable_if_t<std::is_nothrow_invocable_v<F>> {
         using namespace std::chrono;
         auto timer = CreateThreadpoolTimer(&timer_callback_impl<F>, new F(std::forward<F>(f)),
                                            &_callBackEnvironment);
@@ -224,12 +229,12 @@ public:
     [[deprecated("Use chrono::duration as parameter instead")]] void operator()(
         std::chrono::steady_clock::time_point when, F&& f) {
         using namespace std::chrono;
-        operator()(when - steady_clock::now(), std::move(f));
+        operator()(when - steady_clock::now(), std::forward<decltype(f)>(f));
     }
 
     template <typename F, typename Rep, typename Per = std::ratio<1>>
-    auto operator()(std::chrono::duration<Rep, Per> duration, F&& f)
-        -> std::enable_if_t<std::is_nothrow_invocable_v<F>> {
+    auto operator()(std::chrono::duration<Rep, Per> duration,
+                    F&& f) -> std::enable_if_t<std::is_nothrow_invocable_v<F>> {
         lock_t lock(_timed_queue_mutex);
         _timed_queue.emplace_back(std::chrono::steady_clock::now() + duration, std::forward<F>(f));
         std::push_heap(std::begin(_timed_queue), std::end(_timed_queue), greater_first());
@@ -272,10 +277,9 @@ struct system_timer_type {
 
 constexpr auto system_timer = detail::system_timer_type{};
 
-} // namespace v1
-
 /**************************************************************************************************/
 
+} // namespace STLAB_VERSION_NAMESPACE()
 } // namespace stlab
 
 /**************************************************************************************************/

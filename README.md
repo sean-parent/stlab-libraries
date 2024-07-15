@@ -9,6 +9,7 @@ ASL libraries will be migrated here in the `stlab` namespace, new libraries will
 ## Content
 
 ### [Concurrency](https://www.stlab.cc/libraries/concurrency/)
+
 This library provides futures and channels, high level abstractions for implementing algorithms that eases the use of multiple CPU cores while minimizing contention. This library solves several problems of the C++11 and C++17 TS futures.
 
 ## Documentation
@@ -26,8 +27,7 @@ Release changelogs are listed in [CHANGES.md](CHANGES.md).
 
 ## Requirements
 
-- A standards-compliant C++14, C++17, or C++20 compiler
-- **Use with a compiler in C++14-compliant mode** requires Boost.Optional and Boost.Variant >= 1.74.0
+- A standards-compliant C++17, C++20, or C++23 compiler
 - **Building** the library requires CMake 3.23 or later
 - **Testing or developing** the library requires Boost.Test >= 1.74.0
 
@@ -38,36 +38,30 @@ for an introduction to this tool.
 
 ### Preparation
 
-1. Create a build directory outside this library's source tree.  In this guide, we'll use a sibling
+1. Create a build directory outside this library's source tree. In this guide, we'll use a sibling
    directory called `BUILD`.
 
-2. If you are using the library in C++14-compliant mode or need to run the test suite, be sure you
-   have the necessary parts of Boost >= 1.74.0 installed.  Linux distributions usually make a
-   suitable version available through standard package managers.  On macOS or Linux, you can easilly
-   install Boost using [Homebrew](https://brew.sh/).  To install Boost on Windows, you can use
-   Boost's [binary installers](https://sourceforge.net/projects/boost/files/boost-binaries/).
-
-3. Install a version of CMake >= 3.23.  If you are on Debian or Ubuntu Linux you may need to use
+1. Install a version of CMake >= 3.23. If you are on Debian or Ubuntu Linux you may need to use
    `snap` to find one that's new enough.
 
-4. If you are using MSVC, you may need to set environment variables appropriately for your target
+1. If you are using MSVC, you may need to set environment variables appropriately for your target
    architecture by invoking `VCVARSALL.BAT` with an appropriate option.
 
 ### Configure
 
-Run CMake in the root directory of this project, setting `../BUILD` as your build directory.  The
+Run CMake in the root directory of this project, setting `../BUILD` as your build directory. The
 basis of your command will be
 
 ```
 cmake -S . -B ../BUILD -DCMAKE_BUILD_TYPE=# SEE BELOW
 ```
 
-but there are other options you may need to append in order to be successful.  Among them:
+but there are other options you may need to append in order to be successful. Among them:
 
-* `-DCMAKE_BUILD_TYPE=`[`Release`|`Debug`] to build the given configuration (required unless you're using visual studio or another multi-config generator).
-* `-DCMAKE_CXX_STANDARD=`[`14`|`17`|`20`|`23`] to build with compliance to the given C++ standard.
-* `-DBUILD_TESTING=OFF` if you only intend to build, but not test, this library.
-* `-DBoost_USE_STATIC_LIBS=TRUE` if you will be testing on Windows.
+- `-DCMAKE_BUILD_TYPE=`[`Release`|`Debug`] to build the given configuration (required unless you're using visual studio or another multi-config generator).
+- `-DCMAKE_CXX_STANDARD=`[`17`|`20`|`23`] to build with compliance to the given C++ standard.
+- `-DBUILD_TESTING=OFF` if you only intend to build, but not test, this library.
+- `-DBoost_USE_STATIC_LIBS=TRUE` if you will be testing on Windows.
 
 We also suggest the installation of [Ninja](https://ninja-build.org/) and its use by adding
 `-GNinja` to your cmake command line… but ninja is not required.
@@ -81,7 +75,8 @@ cmake -S . -B ../BUILD -GNinja -DCMAKE_CXX_STANDARD=17 -DCMAKE_BUILD_TYPE=Releas
 If you organize the build directory into subdirectories you can support multiple configurations.
 
 ```
-cmake -S . -B ../builds/portable -GXcode -DCMAKE_CXX_STANDARD=17 -DBUILD_TESTING=ON -DSTLAB_TASK_SYSTEM=portable
+rm -rf ../builds/portable
+cmake -S . -B ../builds/portable -GXcode -DCMAKE_CXX_STANDARD=17 -DBUILD_TESTING=ON -DSTLAB_TASK_SYSTEM=portable -DCMAKE_OSX_DEPLOYMENT_TARGET=macosx14.4
 ```
 
 ### Build
@@ -99,7 +94,9 @@ Running the tests in the `BUILD` directory is as simple as invoking
 ```
 ctest -C Debug
 ```
+
 or
+
 ```
 ctest -C Release
 ```

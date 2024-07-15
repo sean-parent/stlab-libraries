@@ -16,8 +16,12 @@
 
 /**************************************************************************************************/
 
+// The namespace for pre_exit cannot be changed without an ABI break. If making an ABI breaking
+// change in this file it needs to be done in a way supporting this version as well.
 namespace stlab {
 inline namespace v1 {
+
+/**************************************************************************************************/
 
 /// Pre-exit handler type.
 #if __cpp_noexcept_function_type >= 201510L
@@ -46,7 +50,7 @@ struct _pre_exit_stack_t {
     }
 
     /// Pop one exit handler, returns `nullptr` and closes stack if empty.
-    pre_exit_handler pop() {
+    auto pop() -> pre_exit_handler {
         lock_t lock{_mutex};
         if (_stack.empty()) {
             assert(!_closed && "WARNING `pre_exit()` invoked more than once.");
@@ -64,7 +68,7 @@ struct _pre_exit_stack_t {
 };
 
 /// Returns a reference to the pre-exit stack singleton.
-inline auto& _pre_exit_stack() {
+inline auto _pre_exit_stack() -> auto& {
     static _pre_exit_stack_t _q;
     return _q;
 }
@@ -84,6 +88,8 @@ inline void pre_exit() {
 /// Register a pre-exit handler. The pre-exit-handler may not throw. With C++17 or later it
 /// is required to be `noexcept`.
 inline void at_pre_exit(pre_exit_handler f) { detail::_pre_exit_stack().push(f); }
+
+/**************************************************************************************************/
 
 } // namespace v1
 } // namespace stlab

@@ -9,6 +9,8 @@
 #ifndef STLAB_CONCURRENCY_EXECUTOR_BASE_HPP
 #define STLAB_CONCURRENCY_EXECUTOR_BASE_HPP
 
+#include <stlab/config.hpp>
+
 #include <chrono>
 #include <functional>
 
@@ -18,10 +20,8 @@
 /**************************************************************************************************/
 
 namespace stlab {
+inline namespace STLAB_VERSION_NAMESPACE() {
 
-/**************************************************************************************************/
-
-inline namespace v1 {
 /**************************************************************************************************/
 
 using executor_t = std::function<void(stlab::task<void() noexcept>)>;
@@ -32,7 +32,7 @@ using executor_t = std::function<void(stlab::task<void() noexcept>)>;
  */
 
 template <typename Rep, typename Per = std::ratio<1>>
-executor_t execute_at(std::chrono::duration<Rep, Per> duration, executor_t executor) {
+auto execute_at(std::chrono::duration<Rep, Per> duration, executor_t executor) -> executor_t {
     return [_duration = std::move(duration), _executor = std::move(executor)](auto f) mutable {
         if (_duration != std::chrono::duration<Rep, Per>{})
             system_timer(_duration,
@@ -44,8 +44,8 @@ executor_t execute_at(std::chrono::duration<Rep, Per> duration, executor_t execu
     };
 }
 
-[[deprecated("Use chrono::duration as parameter instead")]] inline executor_t execute_at(
-    std::chrono::steady_clock::time_point when, executor_t executor) {
+[[deprecated("Use chrono::duration as parameter instead")]] inline auto execute_at(
+    std::chrono::steady_clock::time_point when, executor_t executor) -> executor_t {
     using namespace std::chrono;
     return execute_at(duration_cast<nanoseconds>(when - steady_clock::now()), std::move(executor));
 }
@@ -71,21 +71,18 @@ struct executor_task_pair {
 };
 
 template <typename F>
-executor_task_pair<F> operator&(executor e, F&& f) {
+auto operator&(executor e, F&& f) -> executor_task_pair<F> {
     return executor_task_pair<F>{std::move(e._executor), std::forward<F>(f)};
 }
 
 template <typename F>
-executor_task_pair<F> operator&(F&& f, executor e) {
+auto operator&(F&& f, executor e) -> executor_task_pair<F> {
     return executor_task_pair<F>{std::move(e._executor), std::forward<F>(f)};
 }
 
 /**************************************************************************************************/
 
-} // namespace v1
-
-/**************************************************************************************************/
-
+} // namespace STLAB_VERSION_NAMESPACE()
 } // namespace stlab
 
 /**************************************************************************************************/

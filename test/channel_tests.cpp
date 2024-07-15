@@ -6,7 +6,23 @@
 
 /**************************************************************************************************/
 
+#include <atomic>
+#include <chrono>
+#include <cstddef>
+#include <deque>
+#include <functional>
+#include <initializer_list>
+#include <iostream>
+#include <string>
+#include <thread>
+#include <tuple>
+#include <utility>
+#include <vector>
+
 #include <boost/test/unit_test.hpp>
+
+#include <stlab/concurrency/executor_base.hpp>
+#include <stlab/concurrency/task.hpp>
 
 #ifndef STLAB_DISABLE_FUTURE_COROUTINES
 #define STLAB_DISABLE_FUTURE_COROUTINES
@@ -14,18 +30,20 @@
 
 #include <queue>
 
+#include <stlab/concurrency/await.hpp>
 #include <stlab/concurrency/channel.hpp>
 #include <stlab/concurrency/default_executor.hpp>
-#include <stlab/concurrency/future.hpp>
 #include <stlab/concurrency/immediate_executor.hpp>
 #include <stlab/test/model.hpp>
 
 #include "channel_test_helper.hpp"
 
+using namespace stlab;
+
 BOOST_AUTO_TEST_CASE(int_sender) {
     BOOST_TEST_MESSAGE("int sender");
 
-    stlab::sender<int> send;
+    stlab::sender<int> const send;
 
     BOOST_REQUIRE_NO_THROW(send(42));
 }
@@ -208,8 +226,10 @@ BOOST_AUTO_TEST_CASE(int_channel_copy_assignment_receiver) {
 
 BOOST_AUTO_TEST_CASE(int_concatenate_two_channels) {
     std::atomic_int result{0};
-    stlab::sender<int> A, X;
-    stlab::receiver<int> B, Y;
+    stlab::sender<int> A;
+    stlab::sender<int> X;
+    stlab::receiver<int> B;
+    stlab::receiver<int> Y;
     std::tie(A, B) = stlab::channel<int>(stlab::default_executor);
     std::tie(X, Y) = stlab::channel<int>(stlab::default_executor);
 
@@ -229,9 +249,11 @@ BOOST_AUTO_TEST_CASE(int_concatenate_two_channels) {
 
 BOOST_AUTO_TEST_CASE(int_concatenate_channels_with_different_executor) {
     {
-        std::atomic_int result{ 0 };
+        std::atomic_int result{0};
 
-        auto done = _receive[0] | (stlab::executor{stlab::immediate_executor } & [](int x) { return x + 1; }) | [&result](int x) { result = x; };
+        auto done = _receive[0] |
+                    (stlab::executor{stlab::immediate_executor} & [](int x) { return x + 1; }) |
+                    [&result](int x) { result = x; };
 
         _receive[0].set_ready();
 
@@ -243,9 +265,11 @@ BOOST_AUTO_TEST_CASE(int_concatenate_channels_with_different_executor) {
     }
     test_reset();
     {
-        std::atomic_int result{ 0 };
+        std::atomic_int result{0};
 
-        auto done = _receive[0] | ([](int x) { return x + 1; } & stlab::executor{stlab::immediate_executor }) | [&result](int x) { result = x; };
+        auto done = _receive[0] |
+                    ([](int x) { return x + 1; } & stlab::executor{stlab::immediate_executor}) |
+                    [&result](int x) { result = x; };
 
         _receive[0].set_ready();
 
@@ -274,7 +298,7 @@ public:
         }
     }
 
-    bool execute_next_task() {
+    auto execute_next_task() -> bool {
         if (!_q.empty()) {
             _q.front()();
             _q.pop_front();
@@ -293,14 +317,14 @@ struct echo {
         _state = stlab::yield_immediate;
     }
 
-    int yield() {
+    auto yield() -> int {
         _state = stlab::await_forever;
         return _result;
     }
 
     void close() {}
 
-    const auto& state() const { return _state; }
+    [[nodiscard]] auto state() const -> const auto& { return _state; }
 };
 
 template <typename... T>
@@ -313,18 +337,18 @@ struct generator {
     explicit generator(T&... q) : _queues(q...) {}
 
     template <size_t... I>
-    void push_values(int value, std::index_sequence<I...>) {
+    void push_values(int value, std::index_sequence<I...> /*unused*/) {
         (void)std::initializer_list<int>{(std::get<I>(_queues).push(value), 0)...};
     }
 
-    int yield() {
+    auto yield() -> int {
         push_values(_value, std::make_index_sequence<sizeof...(T)>());
         return _value++;
     }
 
     void close() {}
 
-    const auto& state() const { return _state; }
+    [[nodiscard]] auto state() const -> const auto& { return _state; }
 };
 
 void RequireInClosedRange(size_t minValue, size_t test, size_t maxValue) {
@@ -343,8 +367,8 @@ BOOST_AUTO_TEST_CASE(int_channel_with_2_sized_buffer) {
     generator<std::queue<int>> myGenerator(valuesInFlight);
     echo myEcho;
 
-    auto r2 = std::move(receive) | ref(myGenerator) |
-              (stlab::buffer_size{2} & std::ref(myEcho)) | [&valuesInFlight](auto x) {
+    auto r2 = std::move(receive) | ref(myGenerator) | (stlab::buffer_size{2} & std::ref(myEcho)) |
+              [&valuesInFlight](auto x) {
                   BOOST_REQUIRE_EQUAL(x, valuesInFlight.front());
                   valuesInFlight.pop();
                   std::cout << x << std::endl;
@@ -355,35 +379,35 @@ BOOST_AUTO_TEST_CASE(int_channel_with_2_sized_buffer) {
     // The first buffer has size 2 and the next process has per default size 1,
     // so there can be max 2 + 1 values in flight
     q.execute_next_task(); // generate value(0)
-    BOOST_REQUIRE_GE(3u, valuesInFlight.size());
+    BOOST_REQUIRE_GE(3U, valuesInFlight.size());
     q.execute_next_task(); // await and yield value(0) by echo
-    BOOST_REQUIRE_GE(3u, valuesInFlight.size());
+    BOOST_REQUIRE_GE(3U, valuesInFlight.size());
 
     q.execute_next_task(); // generate value(1)
-    BOOST_REQUIRE_GE(3u, valuesInFlight.size());
+    BOOST_REQUIRE_GE(3U, valuesInFlight.size());
     q.execute_next_task(); // generate value(2)
-    RequireInClosedRange(2u, valuesInFlight.size(), 3u);
+    RequireInClosedRange(2U, valuesInFlight.size(), 3U);
 
     q.execute_next_task(); // print value (0)
-    RequireInClosedRange(2u, valuesInFlight.size(), 3u);
+    RequireInClosedRange(2U, valuesInFlight.size(), 3U);
     q.execute_next_task(); // generate value(3)
-    RequireInClosedRange(2u, valuesInFlight.size(), 3u);
+    RequireInClosedRange(2U, valuesInFlight.size(), 3U);
     q.execute_next_task(); // await and yield value(1) by echo
-    RequireInClosedRange(2u, valuesInFlight.size(), 3u);
+    RequireInClosedRange(2U, valuesInFlight.size(), 3U);
     q.execute_next_task(); // print value (1)
-    RequireInClosedRange(2u, valuesInFlight.size(), 3u);
+    RequireInClosedRange(2U, valuesInFlight.size(), 3U);
     q.execute_next_task(); // await and yield value(2) by echo
-    RequireInClosedRange(2u, valuesInFlight.size(), 3u);
+    RequireInClosedRange(2U, valuesInFlight.size(), 3U);
     q.execute_next_task(); // generate value(4)
-    RequireInClosedRange(2u, valuesInFlight.size(), 3u);
+    RequireInClosedRange(2U, valuesInFlight.size(), 3U);
     q.execute_next_task(); // print value (2)
-    RequireInClosedRange(2u, valuesInFlight.size(), 3u);
+    RequireInClosedRange(2U, valuesInFlight.size(), 3U);
     q.execute_next_task(); // await and yield value(3) by echo
-    RequireInClosedRange(2u, valuesInFlight.size(), 3u);
+    RequireInClosedRange(2U, valuesInFlight.size(), 3U);
     q.execute_next_task(); // generate value(5)
-    RequireInClosedRange(2u, valuesInFlight.size(), 3u);
+    RequireInClosedRange(2U, valuesInFlight.size(), 3U);
     q.execute_next_task(); // print value (3)
-    RequireInClosedRange(2u, valuesInFlight.size(), 3u);
+    RequireInClosedRange(2U, valuesInFlight.size(), 3U);
 }
 
 BOOST_AUTO_TEST_CASE(int_channel_with_3_sized_buffer) {
@@ -407,42 +431,42 @@ BOOST_AUTO_TEST_CASE(int_channel_with_3_sized_buffer) {
     // so there can be max 3 + 1 values in flight
 
     q.execute_next_task(); // generate value(0)
-    BOOST_REQUIRE_GE(3u, valuesInFlight.size());
+    BOOST_REQUIRE_GE(3U, valuesInFlight.size());
     q.execute_next_task(); // await and yield value(0) by echo
-    BOOST_REQUIRE_GE(3u, valuesInFlight.size());
+    BOOST_REQUIRE_GE(3U, valuesInFlight.size());
     q.execute_next_task(); // generate value(1)
-    BOOST_REQUIRE_GE(3u, valuesInFlight.size());
+    BOOST_REQUIRE_GE(3U, valuesInFlight.size());
     q.execute_next_task(); // generate value(2)
 
-    RequireInClosedRange(2u, valuesInFlight.size(), 4u);
+    RequireInClosedRange(2U, valuesInFlight.size(), 4U);
     q.execute_next_task(); // print value (0)
-    RequireInClosedRange(2u, valuesInFlight.size(), 4u);
+    RequireInClosedRange(2U, valuesInFlight.size(), 4U);
     q.execute_next_task(); // generate value(3)
-    RequireInClosedRange(2u, valuesInFlight.size(), 4u);
+    RequireInClosedRange(2U, valuesInFlight.size(), 4U);
     q.execute_next_task(); // generate value(4)
-    RequireInClosedRange(2u, valuesInFlight.size(), 4u);
+    RequireInClosedRange(2U, valuesInFlight.size(), 4U);
     q.execute_next_task(); // await and yield value(1) by echo
-    RequireInClosedRange(2u, valuesInFlight.size(), 4u);
+    RequireInClosedRange(2U, valuesInFlight.size(), 4U);
     q.execute_next_task(); // print value (1)
-    RequireInClosedRange(2u, valuesInFlight.size(), 4u);
+    RequireInClosedRange(2U, valuesInFlight.size(), 4U);
     q.execute_next_task(); // await and yield value(2) by echo
-    RequireInClosedRange(2u, valuesInFlight.size(), 4u);
+    RequireInClosedRange(2U, valuesInFlight.size(), 4U);
     q.execute_next_task(); // generate value(5)
-    RequireInClosedRange(2u, valuesInFlight.size(), 4u);
+    RequireInClosedRange(2U, valuesInFlight.size(), 4U);
     q.execute_next_task(); // print value (2)
-    RequireInClosedRange(2u, valuesInFlight.size(), 4u);
+    RequireInClosedRange(2U, valuesInFlight.size(), 4U);
     q.execute_next_task(); // await and yield value(3) by echo
-    RequireInClosedRange(2u, valuesInFlight.size(), 4u);
+    RequireInClosedRange(2U, valuesInFlight.size(), 4U);
     q.execute_next_task(); // generate value(6)
-    RequireInClosedRange(2u, valuesInFlight.size(), 4u);
+    RequireInClosedRange(2U, valuesInFlight.size(), 4U);
     q.execute_next_task(); // print value (3)
-    RequireInClosedRange(2u, valuesInFlight.size(), 4u);
+    RequireInClosedRange(2U, valuesInFlight.size(), 4U);
 }
 
 BOOST_AUTO_TEST_CASE(int_channel_with_split_different_sized_buffer) {
     // Here the bigger buffer size must not steer the upstream, but the
     // smaller size
-    std::vector<std::pair<size_t, size_t>> bufferSizes = {
+    std::vector<std::pair<size_t, size_t>> const bufferSizes = {
         {1, 2}, {1, 2}, {1, 3}, {3, 1}, {2, 1}};
 
     for (const auto& bs : bufferSizes) {
@@ -451,19 +475,19 @@ BOOST_AUTO_TEST_CASE(int_channel_with_split_different_sized_buffer) {
         std::queue<int> valuesInFlight1;
         std::queue<int> valuesInFlight2;
 
-        generator<std::queue<int>> myGenerator1(valuesInFlight1);
-        generator<std::queue<int>> myGenerator2(valuesInFlight2);
+        generator<std::queue<int>> const myGenerator1(valuesInFlight1);
+        generator<std::queue<int>> const myGenerator2(valuesInFlight2);
 
         auto receive = stlab::channel<void>(q.executor());
 
-        auto g =
-            std::move(receive) | generator<std::queue<int>, std::queue<int>>(valuesInFlight1, valuesInFlight2);
+        auto g = std::move(receive) |
+                 generator<std::queue<int>, std::queue<int>>(valuesInFlight1, valuesInFlight2);
 
-        auto r1 = g | (stlab::buffer_size{ bs.first } &echo()) | [&valuesInFlight1](auto x) {
+        auto r1 = g | (stlab::buffer_size{bs.first} & echo()) | [&valuesInFlight1](auto x) {
             BOOST_REQUIRE_EQUAL(x, valuesInFlight1.front());
             valuesInFlight1.pop();
         };
-        auto r2 = g | (stlab::buffer_size{ bs.second } &echo()) | [&valuesInFlight2](auto x) {
+        auto r2 = g | (stlab::buffer_size{bs.second} & echo()) | [&valuesInFlight2](auto x) {
             BOOST_REQUIRE_EQUAL(x, valuesInFlight2.front());
             valuesInFlight2.pop();
         };
@@ -476,55 +500,55 @@ BOOST_AUTO_TEST_CASE(int_channel_with_split_different_sized_buffer) {
         // in flight can only be 1 + 1
 
         q.execute_next_task(); // generate value(0)
-        RequireInClosedRange(0, valuesInFlight1.size(), 2u);
-        RequireInClosedRange(0, valuesInFlight2.size(), 2u);
+        RequireInClosedRange(0, valuesInFlight1.size(), 2U);
+        RequireInClosedRange(0, valuesInFlight2.size(), 2U);
         q.execute_next_task(); // await and yield value(0) by echo1
-        RequireInClosedRange(0, valuesInFlight1.size(), 2u);
-        RequireInClosedRange(0, valuesInFlight2.size(), 2u);
+        RequireInClosedRange(0, valuesInFlight1.size(), 2U);
+        RequireInClosedRange(0, valuesInFlight2.size(), 2U);
         q.execute_next_task(); // await and yield value(0) by echo2
-        RequireInClosedRange(0, valuesInFlight1.size(), 2u);
-        RequireInClosedRange(0, valuesInFlight2.size(), 2u);
+        RequireInClosedRange(0, valuesInFlight1.size(), 2U);
+        RequireInClosedRange(0, valuesInFlight2.size(), 2U);
         q.execute_next_task(); // print1 value (0)
-        RequireInClosedRange(0, valuesInFlight1.size(), 2u);
-        RequireInClosedRange(0, valuesInFlight2.size(), 2u);
+        RequireInClosedRange(0, valuesInFlight1.size(), 2U);
+        RequireInClosedRange(0, valuesInFlight2.size(), 2U);
         q.execute_next_task(); // generate value(1)
-        RequireInClosedRange(0, valuesInFlight1.size(), 2u);
-        RequireInClosedRange(0, valuesInFlight2.size(), 2u);
+        RequireInClosedRange(0, valuesInFlight1.size(), 2U);
+        RequireInClosedRange(0, valuesInFlight2.size(), 2U);
         q.execute_next_task(); // print2 value (0)
-        RequireInClosedRange(0, valuesInFlight1.size(), 2u);
-        RequireInClosedRange(0, valuesInFlight2.size(), 2u);
+        RequireInClosedRange(0, valuesInFlight1.size(), 2U);
+        RequireInClosedRange(0, valuesInFlight2.size(), 2U);
         q.execute_next_task(); // await and yield value(1) by echo1
-        RequireInClosedRange(0, valuesInFlight1.size(), 2u);
-        RequireInClosedRange(0, valuesInFlight2.size(), 2u);
+        RequireInClosedRange(0, valuesInFlight1.size(), 2U);
+        RequireInClosedRange(0, valuesInFlight2.size(), 2U);
         q.execute_next_task(); // await and yield value(1) by echo2
-        RequireInClosedRange(0, valuesInFlight1.size(), 2u);
-        RequireInClosedRange(0, valuesInFlight2.size(), 2u);
+        RequireInClosedRange(0, valuesInFlight1.size(), 2U);
+        RequireInClosedRange(0, valuesInFlight2.size(), 2U);
         q.execute_next_task(); // print1 value (1)
-        RequireInClosedRange(0, valuesInFlight1.size(), 2u);
-        RequireInClosedRange(0, valuesInFlight2.size(), 2u);
+        RequireInClosedRange(0, valuesInFlight1.size(), 2U);
+        RequireInClosedRange(0, valuesInFlight2.size(), 2U);
         q.execute_next_task(); // generate value(1)
         q.execute_next_task(); // print2 value (1)
-        RequireInClosedRange(0, valuesInFlight1.size(), 2u);
-        RequireInClosedRange(0, valuesInFlight2.size(), 2u);
+        RequireInClosedRange(0, valuesInFlight1.size(), 2U);
+        RequireInClosedRange(0, valuesInFlight2.size(), 2U);
     }
 }
 
 BOOST_AUTO_TEST_CASE(int_channel_one_value_different_buffer_sizes) {
     BOOST_TEST_MESSAGE("int channel one value different buffer sizes");
 
-    for (auto bs : std::vector<std::size_t>{ 0, 1, 2, 10 }) {
-      stlab::sender<int> send;
-      stlab::receiver<int> receive;
-      std::tie(send, receive) = stlab::channel<int>(stlab::default_executor);
-      std::atomic_int result{0};
+    for (auto bs : std::vector<std::size_t>{0, 1, 2, 10}) {
+        stlab::sender<int> send;
+        stlab::receiver<int> receive;
+        std::tie(send, receive) = stlab::channel<int>(stlab::default_executor);
+        std::atomic_int result{0};
 
-        auto check = receive | (stlab::buffer_size{ bs } &[&](int x) { result += x; });
+        auto check = receive | (stlab::buffer_size{bs} & [&](int x) { result += x; });
 
         receive.set_ready();
         send(1);
 
         while (result < 1) {
-            std::this_thread::sleep_for(std::chrono::microseconds(1));
+            invoke_waiting([] { std::this_thread::sleep_for(std::chrono::microseconds(1)); });
         }
 
         BOOST_REQUIRE_EQUAL(1, result);
@@ -534,20 +558,20 @@ BOOST_AUTO_TEST_CASE(int_channel_one_value_different_buffer_sizes) {
 BOOST_AUTO_TEST_CASE(int_channel_two_values_different_buffer_sizes) {
     BOOST_TEST_MESSAGE("int channel two values different buffer sizes");
 
-    for (auto bs : std::vector<std::size_t>{ 0, 1, 2, 10 }) {
+    for (auto bs : std::vector<std::size_t>{0, 1, 2, 10}) {
         stlab::sender<int> send;
         stlab::receiver<int> receive;
         std::tie(send, receive) = stlab::channel<int>(stlab::default_executor);
         std::atomic_int result{0};
 
-        auto check = receive | (stlab::buffer_size{ bs } &[&](int x) { result += x; });
+        auto check = receive | (stlab::buffer_size{bs} & [&](int x) { result += x; });
 
         receive.set_ready();
         send(1);
         send(1);
 
         while (result < 2) {
-            std::this_thread::sleep_for(std::chrono::microseconds(1));
+            invoke_waiting([] { std::this_thread::sleep_for(std::chrono::microseconds(1)); });
         }
 
         BOOST_REQUIRE_EQUAL(2, result);
@@ -558,45 +582,46 @@ BOOST_AUTO_TEST_CASE(int_channel_many_values_different_buffer_sizes) {
     BOOST_TEST_MESSAGE("int channel many values different buffer sizes");
 
     {
-        for (auto bs : std::vector<std::size_t>{ 0, 1, 2, 10 }) {
+        for (auto bs : std::vector<std::size_t>{0, 1, 2, 10}) {
             stlab::sender<int> send;
             stlab::receiver<int> receive;
             std::tie(send, receive) = stlab::channel<int>(stlab::default_executor);
-            std::atomic_int result{ 0 };
+            std::atomic_int result{0};
 
-            auto check = receive | (stlab::buffer_size{ bs } &[&](int x) { result += x; });
+            auto check = receive | (stlab::buffer_size{bs} & [&](int x) { result += x; });
 
             receive.set_ready();
-            for (auto i = 0; i < 10; ++i)
+            for (auto i = 0; i < 10; ++i) {
                 send(1);
+            }
 
             while (result < 10) {
-                std::this_thread::sleep_for(std::chrono::microseconds(1));
+                invoke_waiting([] { std::this_thread::sleep_for(std::chrono::microseconds(1)); });
             }
 
             BOOST_REQUIRE_EQUAL(10, result);
         }
     }
     {
-        for (auto bs : std::vector<std::size_t>{ 0, 1, 2, 10 }) {
+        for (auto bs : std::vector<std::size_t>{0, 1, 2, 10}) {
             stlab::sender<int> send;
             stlab::receiver<int> receive;
             std::tie(send, receive) = stlab::channel<int>(stlab::default_executor);
-            std::atomic_int result{ 0 };
+            std::atomic_int result{0};
 
-            auto check = receive | ([&](int x) { result += x; } & stlab::buffer_size{ bs });
+            auto check = receive | ([&](int x) { result += x; } & stlab::buffer_size{bs});
 
             receive.set_ready();
-            for (auto i = 0; i < 10; ++i)
+            for (auto i = 0; i < 10; ++i) {
                 send(1);
+            }
 
             while (result < 10) {
-                std::this_thread::sleep_for(std::chrono::microseconds(1));
+                invoke_waiting([] { std::this_thread::sleep_for(std::chrono::microseconds(1)); });
             }
 
             BOOST_REQUIRE_EQUAL(10, result);
         }
-
     }
 }
 
@@ -636,8 +661,10 @@ BOOST_AUTO_TEST_CASE(report_channel_broken_when_process_is_already_running) {
 BOOST_AUTO_TEST_CASE(sender_receiver_equality_tests) {
     BOOST_TEST_MESSAGE("running sender equality tests");
     {
-        stlab::sender<int> a, b;
-        stlab::receiver<int> x, y;
+        stlab::sender<int> a;
+        stlab::sender<int> b;
+        stlab::receiver<int> x;
+        stlab::receiver<int> y;
 
         BOOST_REQUIRE(a == b);
         BOOST_REQUIRE(!(a != b));
@@ -647,8 +674,10 @@ BOOST_AUTO_TEST_CASE(sender_receiver_equality_tests) {
     }
 
     {
-        stlab::sender<stlab::move_only> a, b;
-        stlab::receiver<stlab::move_only> x, y;
+        stlab::sender<stlab::move_only> a;
+        stlab::sender<stlab::move_only> b;
+        stlab::receiver<stlab::move_only> x;
+        stlab::receiver<stlab::move_only> y;
 
         BOOST_REQUIRE(a == b);
         BOOST_REQUIRE(!(a != b));
@@ -669,8 +698,10 @@ BOOST_AUTO_TEST_CASE(sender_receiver_equality_tests) {
     }
 
     {
-        stlab::sender<int> a, b;
-        stlab::receiver<int> x, y;
+        stlab::sender<int> a;
+        stlab::sender<int> b;
+        stlab::receiver<int> x;
+        stlab::receiver<int> y;
         std::tie(a, x) = stlab::channel<int>(stlab::immediate_executor);
         std::tie(b, y) = stlab::channel<int>(stlab::immediate_executor);
 
@@ -682,18 +713,21 @@ BOOST_AUTO_TEST_CASE(sender_receiver_equality_tests) {
         stlab::receiver<stlab::move_only> rec;
         std::tie(send, rec) = stlab::channel<stlab::move_only>(stlab::immediate_executor);
 
-        stlab::sender<stlab::move_only> a;
+        stlab::sender<stlab::move_only> const a;
         BOOST_REQUIRE(a != send);
     }
 }
 
 BOOST_AUTO_TEST_CASE(sender_receiver_swap_tests) {
     {
-        stlab::sender<int> a, b;
-        stlab::receiver<int> x, y;
+        stlab::sender<int> a;
+        stlab::sender<int> b;
+        stlab::receiver<int> x;
+        stlab::receiver<int> y;
         std::tie(a, x) = stlab::channel<int>(stlab::immediate_executor);
         std::tie(b, y) = stlab::channel<int>(stlab::immediate_executor);
-        int result1(0), result2(0);
+        int result1(0);
+        int result2(0);
 
         auto v = x | [&result1](int i) { result1 = i; };
         auto w = y | [&result2](int i) { result2 = i; };
@@ -710,11 +744,14 @@ BOOST_AUTO_TEST_CASE(sender_receiver_swap_tests) {
         BOOST_REQUIRE_EQUAL(2, result1);
     }
     {
-        stlab::sender<int> a, b;
-        stlab::receiver<int> x, y;
+        stlab::sender<int> a;
+        stlab::sender<int> b;
+        stlab::receiver<int> x;
+        stlab::receiver<int> y;
         std::tie(a, x) = stlab::channel<int>(stlab::immediate_executor);
         std::tie(b, y) = stlab::channel<int>(stlab::immediate_executor);
-        int result1(0), result2(0);
+        int result1(0);
+        int result2(0);
 
         swap(x, y);
 
@@ -731,11 +768,14 @@ BOOST_AUTO_TEST_CASE(sender_receiver_swap_tests) {
         BOOST_REQUIRE_EQUAL(2, result1);
     }
     {
-        stlab::sender<stlab::move_only> a, b;
-        stlab::receiver<stlab::move_only> x, y;
+        stlab::sender<stlab::move_only> a;
+        stlab::sender<stlab::move_only> b;
+        stlab::receiver<stlab::move_only> x;
+        stlab::receiver<stlab::move_only> y;
         std::tie(a, x) = stlab::channel<stlab::move_only>(stlab::immediate_executor);
         std::tie(b, y) = stlab::channel<stlab::move_only>(stlab::immediate_executor);
-        int result1(0), result2(0);
+        int result1(0);
+        int result2(0);
 
         auto v = x | [&result1](stlab::move_only i) { result1 = i.member(); };
         auto w = y | [&result2](stlab::move_only i) { result2 = i.member(); };
@@ -752,11 +792,14 @@ BOOST_AUTO_TEST_CASE(sender_receiver_swap_tests) {
         BOOST_REQUIRE_EQUAL(2, result1);
     }
     {
-        stlab::sender<stlab::move_only> a, b;
-        stlab::receiver<stlab::move_only> x, y;
+        stlab::sender<stlab::move_only> a;
+        stlab::sender<stlab::move_only> b;
+        stlab::receiver<stlab::move_only> x;
+        stlab::receiver<stlab::move_only> y;
         std::tie(a, x) = stlab::channel<stlab::move_only>(stlab::immediate_executor);
         std::tie(b, y) = stlab::channel<stlab::move_only>(stlab::immediate_executor);
-        int result1(0), result2(0);
+        int result1(0);
+        int result2(0);
 
         std::swap(x, y);
 

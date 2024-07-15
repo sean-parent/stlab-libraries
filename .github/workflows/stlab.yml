@@ -13,12 +13,12 @@ jobs:
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4.1.6
 
       - name: Generate job matrix
         id: set-matrix
         # Note: The json in this variable must be a single line for parsing to succeed.
-        run: echo "::set-output name=matrix::$(cat .github/matrix.json | scripts/flatten_json.py)"
+        run: echo "matrix=$(cat .github/matrix.json | scripts/flatten_json.py)" >> $GITHUB_OUTPUT
 
   builds:
     # installed tools and runners can be found here: https://github.com/actions/runner-images
@@ -30,12 +30,22 @@ jobs:
     name: ${{ matrix.config.name }}
 
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4.1.6
 
       - name: Install dependencies // macOS
         if: ${{ startsWith(matrix.config.os, 'macos') }}
         run: |
           brew update
+          rm '/usr/local/bin/2to3'
+          rm '/usr/local/bin/2to3-3.12'
+          rm '/usr/local/bin/idle3'
+          rm '/usr/local/bin/idle3.12'
+          rm '/usr/local/bin/pydoc3'
+          rm '/usr/local/bin/pydoc3.12'
+          rm '/usr/local/bin/python3'
+          rm '/usr/local/bin/python3.12'
+          rm '/usr/local/bin/python3-config'
+          rm '/usr/local/bin/python3.12-config'
           brew install boost
           brew install ninja
         shell: bash
@@ -52,7 +62,10 @@ jobs:
         if: ${{ startsWith(matrix.config.os, 'windows') }}
         run: |
           choco install --yes ninja
-          vcpkg install boost-test:x64-windows boost-multiprecision:x64-windows boost-variant:x64-windows
+          vcpkg install boost-test:x64-windows boost-multiprecision:x64-windows
+        # vcpkg install boost:x64-windows
+        # dotnet add package boost --version 1.85.0
+        # choco install --yes boost-msvc-14.3
         shell: cmd
 
       - name: Install dependencies // Linux Emscripten
@@ -97,7 +110,7 @@ jobs:
           cmake -S $HOME/boost -B ../build-boost -GNinja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=23 \
             -DCMAKE_CXX_FLAGS="-Wno-deprecated-builtins" \
             -DCMAKE_TOOLCHAIN_FILE=$GITHUB_WORKSPACE/cmake/Platform/Emscripten-STLab.cmake \
-            -DBOOST_INCLUDE_LIBRARIES="optional;variant;multiprecision;test"
+            -DBOOST_INCLUDE_LIBRARIES="multiprecision;test"
 
           cmake --build ../build-boost
           cmake --install ../build-boost
@@ -123,7 +136,7 @@ jobs:
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
           mkdir ..\build
-          cmake -S. -B../build -GNinja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=20 -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake
+          cmake -S. -B../build -GNinja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_STANDARD=20 -DBoost_USE_STATIC_LIBS=TRUE -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake
 
       - name: Build // Unix
         if: ${{ startsWith(matrix.config.os, 'ubuntu') || startsWith(matrix.config.os, 'macos') }}

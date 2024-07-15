@@ -11,13 +11,13 @@
 
 #include <stlab/concurrency/channel.hpp>
 
+#include <stlab/concurrency/await.hpp>
 #include <stlab/concurrency/default_executor.hpp>
 #include <stlab/concurrency/task.hpp>
 #include <stlab/scope.hpp>
 
 #include <queue>
 #include <thread>
-
 
 using lock_t = std::unique_lock<std::mutex>;
 
@@ -42,7 +42,8 @@ public:
 
     static void wait_until_queue_size_of(std::size_t n) {
         while (stlab::scope<lock_t>(_mutex, [&] { return _tasks.size(); }) < n) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            stlab::invoke_waiting(
+                [] { std::this_thread::sleep_for(std::chrono::milliseconds(1)); });
         }
     }
 
@@ -63,7 +64,8 @@ struct channel_test_fixture_base {
     template <typename F>
     void wait_until_done(F&& f) const {
         while (!std::forward<F>(f)()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            stlab::invoke_waiting(
+                [] { std::this_thread::sleep_for(std::chrono::milliseconds(1)); });
         }
     }
 };
@@ -73,9 +75,7 @@ struct channel_test_fixture : channel_test_fixture_base {
     std::array<stlab::sender<T>, N> _send;
     std::array<stlab::receiver<T>, N> _receive;
 
-    channel_test_fixture() {
-        test_reset();
-    }
+    channel_test_fixture() { test_reset(); }
 
     void test_reset() {
         for (std::size_t i = 0; i < N; i++)
@@ -94,12 +94,12 @@ struct channel_types_test_fixture : channel_test_fixture_base {
     }
 
     template <std::size_t I>
-    auto& send() {
+    auto send() -> auto& {
         return std::get<I>(_send);
     }
 
     template <std::size_t I>
-    auto& receive() {
+    auto receive() -> auto& {
         return std::get<I>(_receive);
     }
 };
@@ -120,7 +120,8 @@ public:
     template <typename F>
     void wait_until_done(F&& f) const {
         while (!std::forward<F>(f)()) {
-            std::this_thread::sleep_for(std::chrono::microseconds(1));
+            stlab::invoke_waiting(
+                [] { std::this_thread::sleep_for(std::chrono::microseconds(1)); });
         }
     }
 };
@@ -139,7 +140,7 @@ struct sum {
         }
     }
 
-    int yield() {
+    auto yield() -> int {
         auto result = _x;
         _state = stlab::await_forever;
         _number_additions = 0;
@@ -147,10 +148,10 @@ struct sum {
         return result;
     }
 
-    auto state() const { return _state; }
+    [[nodiscard]] auto state() const { return _state; }
 };
 
-inline stlab::process_state_scheduled await_soon() {
+inline auto await_soon() -> stlab::process_state_scheduled {
     return std::make_pair(stlab::process_state::await, std::chrono::seconds(1));
 }
 
@@ -173,7 +174,7 @@ struct timed_sum {
         }
     }
 
-    int yield() {
+    auto yield() -> int {
         int result = 0;
         {
             lock_t guard(_mutex);
@@ -185,12 +186,12 @@ struct timed_sum {
         return result;
     }
 
-    static int current_sum() {
+    static auto current_sum() -> int {
         lock_t guard(_mutex);
         return _x;
     }
 
-    auto state() const {
+    [[nodiscard]] auto state() const {
         lock_t guard(_mutex);
         return _state;
     }
@@ -211,7 +212,7 @@ struct collector {
         }
     }
 
-    std::vector<int> yield() {
+    auto yield() -> std::vector<int> {
         auto result = _c;
         _state = stlab::await_forever;
         _collected_items = 0;
@@ -219,7 +220,7 @@ struct collector {
         return result;
     }
 
-    auto state() const { return _state; }
+    [[nodiscard]] auto state() const { return _state; }
 };
 
 } // namespace channel_test_helper

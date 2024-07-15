@@ -9,6 +9,7 @@
 #ifndef FUTURE_TEST_HELPER_HPP_
 #define FUTURE_TEST_HELPER_HPP_
 
+#include <stlab/concurrency/await.hpp>
 #include <stlab/concurrency/default_executor.hpp>
 #include <stlab/concurrency/future.hpp>
 
@@ -30,22 +31,14 @@ struct custom_scheduler {
 
     void operator()(stlab::task<void() noexcept> f) const {
         ++counter();
-        // The implementation on Windows or the mac uses a scheduler that allows many tasks in the
-        // pool in parallel
-#if defined(WIN32) || defined(__APPLE__)
         stlab::default_executor(std::move(f));
-#else
-        // The default scheduler under Linux allows only as many tasks as there are physical cores.
-        // But this can lead to a dead lock in some of the tests
-        std::thread(std::move(f)).detach();
-#endif
     }
 
-    static int usage_counter() { return counter().load(); }
+    static auto usage_counter() -> int { return counter().load(); }
 
     static void reset() { counter() = 0; }
 
-    static std::atomic_int& counter() {
+    static auto counter() -> std::atomic_int& {
         static std::atomic_int counter;
         return counter;
     }
@@ -55,7 +48,7 @@ private:
 };
 
 template <std::size_t I>
-stlab::executor_t make_executor() {
+auto make_executor() -> stlab::executor_t {
     return [_executor = custom_scheduler<I>{}](stlab::task<void() noexcept> f) mutable {
         _executor(std::move(f));
     };
@@ -65,20 +58,20 @@ class test_exception : public std::exception {
     std::string _error;
 
 public:
-    test_exception() {}
+    test_exception() = default;
 
-    explicit test_exception(const std::string& error);
+    explicit test_exception(std::string error);
 
     explicit test_exception(const char* error);
 
-    test_exception& operator=(const test_exception&) = default;
+    auto operator=(const test_exception&) -> test_exception& = default;
     test_exception(const test_exception&) = default;
-    test_exception& operator=(test_exception&&) = default;
+    auto operator=(test_exception&&) -> test_exception& = default;
     test_exception(test_exception&&) = default;
 
-    virtual ~test_exception() {}
+    ~test_exception() override = default;
 
-    const char* what() const noexcept override;
+    [[nodiscard]] auto what() const noexcept -> const char* override;
 };
 
 struct test_setup {
@@ -95,54 +88,42 @@ struct test_fixture {
         custom_scheduler<1>::reset();
     }
 
-    ~test_fixture() {}
+    ~test_fixture() = default;
 
     stlab::future<T> sut;
 
     template <typename... F>
-    void wait_until_future_completed(F&... f) {
-        (void)std::initializer_list<int>{(wait_until_future_is_ready(f), 0)...};
-    }
-
-    template <typename F>
-    auto wait_until_future_r_completed(F& f) {
-        auto result = f.get_try();
-        while (!result) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            result = f.get_try();
-        }
-        return result;
+    void wait_until_future_completed(F&&... f) {
+        (void)std::initializer_list<int>{(wait_until_future_is_ready(std::forward<F>(f)), 0)...};
     }
 
     void check_valid_future() {}
 
-    void check_valid_future(const stlab::future<T>& f) {
-        BOOST_REQUIRE(f.valid() == true);
-        BOOST_REQUIRE(!f.exception());
-    }
+    void check_valid_future(const stlab::future<T>& f) { BOOST_REQUIRE(f.valid() == true); }
 
     template <typename F, typename... FS>
     void check_valid_future(const F& f, const FS&... fs) {
         BOOST_REQUIRE(f.valid() == true);
-        BOOST_REQUIRE(!f.exception());
         check_valid_future(fs...);
     }
 
     template <typename E, typename F>
     static void check_failure(F& f, const char* message) {
-        BOOST_REQUIRE_EXCEPTION(f.get_try(), E, ([_m = message](const auto& e) {
+        BOOST_REQUIRE_EXCEPTION((void)f.get_try(), E, ([_m = message](const auto& e) {
                                     return std::string(_m) == std::string(e.what());
                                 }));
     }
 
     template <typename E, typename... F>
-    void wait_until_future_fails(F&... f) {
-        (void)std::initializer_list<int>{(wait_until_this_future_fails<E>(f), 0)...};
+    void wait_until_future_fails(F&&... f) {
+        (void)std::initializer_list<int>{
+            (wait_until_this_future_fails<E>(std::forward<F>(f)), 0)...};
     }
 
     void wait_until_all_tasks_completed() {
         while (_task_counter.load() != 0) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            stlab::invoke_waiting(
+                [] { std::this_thread::sleep_for(std::chrono::milliseconds(1)); });
         }
     }
 
@@ -150,18 +131,14 @@ struct test_fixture {
 
 private:
     template <typename F>
-    void wait_until_future_is_ready(F& f) {
-        while (!f.get_try()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
+    void wait_until_future_is_ready(F&& f) {
+        (void)stlab::await(std::forward<F>(f));
     }
 
     template <typename E, typename F>
-    void wait_until_this_future_fails(F& f) {
+    void wait_until_this_future_fails(F&& f) {
         try {
-            while (!f.get_try()) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            }
+            (void)stlab::await(std::forward<F>(f));
         } catch (const E&) {
         }
     }
@@ -176,35 +153,36 @@ struct thread_block_context {
     thread_block_context() : _mutex(std::make_shared<std::mutex>()) {}
 };
 
-class scoped_decrementer {
-    std::atomic_int& _v;
-
-public:
-    explicit scoped_decrementer(std::atomic_int& v) : _v(v) {}
-
-    ~scoped_decrementer() { --_v; }
-};
-
 template <typename F, typename P>
 class test_functor_base : public P {
     F _f;
-    std::atomic_int& _task_counter;
+    std::atomic_int* _task_counter{nullptr};
 
 public:
     test_functor_base(F f, std::atomic_int& task_counter) :
-        _f(std::move(f)), _task_counter(task_counter) {}
+        _f(std::move(f)), _task_counter(&task_counter) {
+        ++*_task_counter;
+    }
 
-    ~test_functor_base() {}
+    ~test_functor_base() {
+        if (_task_counter) --*_task_counter;
+    }
 
-    test_functor_base(const test_functor_base&) = default;
-    test_functor_base& operator=(const test_functor_base&) = default;
-    test_functor_base(test_functor_base&&) = default;
-    test_functor_base& operator=(test_functor_base&&) = default;
+    test_functor_base(const test_functor_base&) = delete;
+    auto operator=(const test_functor_base&) -> test_functor_base& = delete;
+
+    test_functor_base(test_functor_base&& a) noexcept :
+        P{std::move(a)}, _f{std::move(a._f)},
+        _task_counter{std::exchange(a._task_counter, nullptr)} {}
+    auto operator=(test_functor_base&& a) noexcept -> test_functor_base& {
+        static_cast<P*>(*this) = std::move(a); // move base
+        _f = std::move(a._f);
+        _task_counter = std::exchange(a._task_counter, nullptr);
+    }
 
     template <typename... Args>
     auto operator()(Args&&... args) const {
-        ++_task_counter;
-        scoped_decrementer d(_task_counter);
+        assert(_task_counter);
         P::action();
         return _f(std::forward<Args>(args)...);
     }

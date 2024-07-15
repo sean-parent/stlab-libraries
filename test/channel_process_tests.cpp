@@ -6,16 +6,26 @@
 
 /**************************************************************************************************/
 
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <chrono>
+#include <cstddef>
+#include <exception>
+#include <thread>
+#include <tuple>
+#include <vector>
+
 #include <boost/test/unit_test.hpp>
 
+#include <stlab/concurrency/await.hpp>
 #include <stlab/concurrency/channel.hpp>
 #include <stlab/concurrency/default_executor.hpp>
 #include <stlab/concurrency/future.hpp>
 
-#include <algorithm>
-#include <vector>
-
 #include "channel_test_helper.hpp"
+
+using namespace stlab;
 
 using channel_test_fixture_int_1 = channel_test_helper::channel_test_fixture<int, 1>;
 
@@ -33,8 +43,9 @@ BOOST_AUTO_TEST_CASE(int_channel_process_with_one_step) {
     };
 
     _receive[0].set_ready();
-    for (auto i = 0; i < 10; ++i)
+    for (auto i = 0; i < 10; ++i) {
         _send[0](i);
+    }
 
     wait_until_done([&] { return index == 10; });
 
@@ -79,12 +90,13 @@ BOOST_AUTO_TEST_CASE(int_channel_process_with_two_steps) {
     };
 
     _receive[0].set_ready();
-    for (auto i = 0; i < 10; ++i)
+    for (auto i = 0; i < 10; ++i) {
         _send[0](i);
+    }
 
     wait_until_done([&] { return index == 5; });
 
-    int expectation[] = {1, 5, 9, 13, 17};
+    std::array expectation{1, 5, 9, 13, 17};
     for (auto i = 0; i < 5; ++i) {
         BOOST_REQUIRE_EQUAL(expectation[i], results[i]);
     }
@@ -96,10 +108,11 @@ BOOST_AUTO_TEST_CASE(int_channel_process_with_two_steps_async) {
     std::atomic_int index{0};
     std::vector<std::vector<int>> results;
 
-    auto check = _receive[0] | channel_test_helper::collector<2>() | [&](std::vector<int> x) {
-        results.push_back(x);
-        ++index;
-    };
+    auto check =
+        _receive[0] | channel_test_helper::collector<2>() | [&](const std::vector<int>& x) {
+            results.push_back(x);
+            ++index;
+        };
 
     _receive[0].set_ready();
     std::vector<stlab::future<void>> f(10);
@@ -130,8 +143,9 @@ BOOST_AUTO_TEST_CASE(int_channel_process_with_many_steps) {
     auto check = _receive[0] | channel_test_helper::sum<10>() | [&](int x) { result = x; };
 
     _receive[0].set_ready();
-    for (auto i = 0; i < 10; ++i)
+    for (auto i = 0; i < 10; ++i) {
         _send[0](i);
+    }
 
     wait_until_done([&] { return result != 0; });
 
@@ -164,18 +178,21 @@ BOOST_AUTO_TEST_CASE(int_channel_split_process_one_step) {
     std::atomic_int index2{0};
     std::vector<int> results2(10, 0);
 
-    auto check1 = _receive[0] | channel_test_helper::sum<1>() | [& _index = index1, &_results = results1](int x) {
-        _results[x] = x;
-        ++_index;
-    };
-    auto check2 = _receive[0] | channel_test_helper::sum<1>() | [& _index = index2, &_results = results2](int x) {
-        _results[x] = x;
-        ++_index;
-    };
+    auto check1 = _receive[0] | channel_test_helper::sum<1>() |
+                  [&_index = index1, &_results = results1](int x) {
+                      _results[x] = x;
+                      ++_index;
+                  };
+    auto check2 = _receive[0] | channel_test_helper::sum<1>() |
+                  [&_index = index2, &_results = results2](int x) {
+                      _results[x] = x;
+                      ++_index;
+                  };
 
     _receive[0].set_ready();
-    for (auto i = 0; i < 10; ++i)
+    for (auto i = 0; i < 10; ++i) {
         _send[0](i);
+    }
 
     wait_until_done([&] { return index1 == 10 && index2 == 10; });
 
@@ -193,22 +210,25 @@ BOOST_AUTO_TEST_CASE(int_channel_split_process_two_steps) {
     std::atomic_int index2{0};
     std::vector<int> results2(5);
 
-    auto check1 = _receive[0] | channel_test_helper::sum<2>() | [& _index = index1, &_results = results1](int x) {
-        _results[_index] = x;
-        ++_index;
-    };
-    auto check2 = _receive[0] | channel_test_helper::sum<2>() | [& _index = index2, &_results = results2](int x) {
-        _results[_index] = x;
-        ++_index;
-    };
+    auto check1 = _receive[0] | channel_test_helper::sum<2>() |
+                  [&_index = index1, &_results = results1](int x) {
+                      _results[_index] = x;
+                      ++_index;
+                  };
+    auto check2 = _receive[0] | channel_test_helper::sum<2>() |
+                  [&_index = index2, &_results = results2](int x) {
+                      _results[_index] = x;
+                      ++_index;
+                  };
 
     _receive[0].set_ready();
-    for (auto i = 0; i < 10; ++i)
+    for (auto i = 0; i < 10; ++i) {
         _send[0](i);
+    }
 
     wait_until_done([&] { return index1 == 5 && index2 == 5; });
 
-    int expectation[] = {1, 5, 9, 13, 17};
+    const std::array expectation{1, 5, 9, 13, 17};
     for (auto i = 0; i < 5; ++i) {
         BOOST_REQUIRE_EQUAL(expectation[i], results1[i]);
         BOOST_REQUIRE_EQUAL(expectation[i], results2[i]);
@@ -221,12 +241,15 @@ BOOST_AUTO_TEST_CASE(int_channel_split_process_many_steps) {
     std::atomic_int result1{0};
     std::atomic_int result2{0};
 
-    auto check1 = _receive[0] | channel_test_helper::sum<10>() | [& _result = result1](int x) { _result = x; };
-    auto check2 = _receive[0] | channel_test_helper::sum<10>() | [& _result = result2](int x) { _result = x; };
+    auto check1 =
+        _receive[0] | channel_test_helper::sum<10>() | [&_result = result1](int x) { _result = x; };
+    auto check2 =
+        _receive[0] | channel_test_helper::sum<10>() | [&_result = result2](int x) { _result = x; };
 
     _receive[0].set_ready();
-    for (auto i = 0; i < 10; ++i)
+    for (auto i = 0; i < 10; ++i) {
         _send[0](i);
+    }
 
     wait_until_done([&] { return result1 != 0 && result2 != 0; });
 
@@ -261,7 +284,7 @@ BOOST_AUTO_TEST_CASE(int_channel_process_with_two_steps_timed) {
     channel_test_helper::manual_scheduler::run_next_task();
 
     while (result == 0) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        invoke_waiting([] { std::this_thread::sleep_for(std::chrono::milliseconds(10)); });
     }
 
     BOOST_REQUIRE_EQUAL(42, result);
@@ -282,13 +305,13 @@ BOOST_AUTO_TEST_CASE(int_channel_process_with_two_steps_timed_wo_timeout) {
     send(42);
 
     while (channel_test_helper::timed_sum::current_sum() != 42) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        invoke_waiting([] { std::this_thread::sleep_for(std::chrono::milliseconds(10)); });
     }
 
     send(43);
 
     while (result == 0) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        invoke_waiting([] { std::this_thread::sleep_for(std::chrono::milliseconds(10)); });
     }
 
     BOOST_REQUIRE_EQUAL(85, result);
@@ -300,13 +323,13 @@ struct process_with_set_error {
 
     std::atomic_bool& _check;
 
-    void await(int) { throw std::runtime_error{""}; }
+    static void await(int /*unused*/) { throw std::runtime_error{""}; }
 
-    void set_error(std::exception_ptr) { _check = true; }
+    void set_error(const std::exception_ptr /*unused*/&) { _check = true; }
 
-    int yield() { return 42; }
+    static auto yield() -> int { return 42; }
 
-    auto state() const { return stlab::await_forever; }
+    [[nodiscard]] static auto state() { return stlab::await_forever; }
 };
 } // namespace
 
@@ -330,7 +353,7 @@ BOOST_AUTO_TEST_CASE(int_channel_process_set_error_is_called_on_upstream_error) 
     send(42);
 
     while (!check) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        invoke_waiting([] { std::this_thread::sleep_for(std::chrono::milliseconds(10)); });
     }
 
     BOOST_REQUIRE_EQUAL(true, check.load());
@@ -342,13 +365,13 @@ struct process_with_close {
 
     std::atomic_bool& _check;
 
-    void await(int) { throw std::runtime_error{""}; }
+    static void await(int /*unused*/) { throw std::runtime_error{""}; }
 
     void close() { _check = true; }
 
-    int yield() { return 42; }
+    static auto yield() -> int { return 42; }
 
-    auto state() const { return stlab::await_forever; }
+    [[nodiscard]] static auto state() { return stlab::await_forever; }
 };
 } // namespace
 
@@ -372,7 +395,7 @@ BOOST_AUTO_TEST_CASE(int_channel_process_close_is_called_on_upstream_error) {
     send(42);
 
     while (!check) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        invoke_waiting([] { std::this_thread::sleep_for(std::chrono::milliseconds(10)); });
     }
 
     BOOST_REQUIRE_EQUAL(true, check.load());
